@@ -8,11 +8,72 @@ from unittest.mock import patch
 
 from context_audit.capture import CaptureStore
 from context_audit.launch import command
-from context_audit.recordings import discover, resolve, session_identity
+from context_audit.recordings import discover, resolve, session_identity, native_session_id
 from context_audit.recording_view import render_recording
 
 
 class RecordingTests(unittest.TestCase):
+    def test_native_lifecycle_only_session_has_explicit_pending_view(self):
+        from context_audit.provenance import record_event
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            directory = root / 'omp-started'
+            record_event(CaptureStore(directory, 'omp'), {'type': 'session_start'})
+            self.assertEqual(resolve('omp', 'started', root), directory)
+            html = render_recording(directory, 'started')
+            self.assertIn('"view_kind": "captured-pending"', html)
+            self.assertIn('not measured, not zero', html)
+            with self.assertRaisesRegex(ValueError, 'No matching captured request'):
+                render_recording(directory, 'another')
+            with self.assertRaisesRegex(ValueError, 'was not captured'):
+                resolve('claude', 'started', root)
+            with self.assertRaisesRegex(ValueError, 'No matching captured request'):
+                render_recording(directory, 'started', sequence=1)
+
+    def test_omp_current_without_persisted_transcript(self):
+        from context_audit.cli import main
+        sid = '01a0b94b-6613-7357-953e-c93a8d67b2cc'
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            missing = home / f'2026-09-19T10-52-01-427Z_{sid}.jsonl'
+            CaptureStore(home / '.context-audit/captures/omp-test', 'omp').request(
+                {'messages': [{'role': 'user', 'content': 'test'}]}, session_id=sid)
+            for identity_args in (['--session-file', str(missing)], ['--session-id', sid]):
+                with patch('pathlib.Path.home', return_value=home), patch.dict('os.environ', {}, clear=True), \
+                        patch('sys.argv', ['context-audit', 'current', '--client', 'omp', '--no-open', *identity_args]), \
+                        redirect_stdout(io.StringIO()):
+                    main()
+                self.assertTrue((home / f'.context-audit/reports/omp-{sid}-capture.html').exists())
+            self.assertFalse(missing.exists())
+
+    def test_native_missing_file_never_guesses_neighboring_capture(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with self.assertRaisesRegex(ValueError, 'no native session ID'):
+                native_session_id(root / 'arbitrary.jsonl')
+            sid = native_session_id(root / '2026-09-19T10-52-01-427Z_01a0b94b-6613-7357-953e-c93a8d67b2cc.jsonl')
+            CaptureStore(root / 'other', 'omp').request({'messages': []}, session_id='other')
+            with self.assertRaisesRegex(ValueError, 'was not captured'):
+                resolve('omp', sid, root)
+
+    def test_native_existing_header_remains_authoritative(self):
+        from context_audit.cli import atomic_write
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / '2026-09-19T10-52-01-427Z_01a0b94b-6613-7357-953e-c93a8d67b2cc.jsonl'
+            atomic_write(path, json.dumps({'type': 'session', 'id': 'header-id'}) + '\n')
+            self.assertEqual(native_session_id(path), 'header-id')
+            atomic_write(path, json.dumps({'type': 'message', 'id': 'wrong'}) + '\n')
+            with self.assertRaisesRegex(ValueError, 'valid native session header'):
+                native_session_id(path)
+
+    def test_native_command_uses_manager_id_not_transcript(self):
+        from context_audit.integrations import integration_files
+        for path, body in integration_files().items():
+            if path.suffix == '.ts':
+                self.assertIn('getSessionId()', body)
+                self.assertIn('"--session-id", sessionId', body)
+                self.assertNotIn('getSessionFile()', body)
+
     def test_current_cli_opens_only_exact_capture(self):
         from context_audit.cli import main
         with tempfile.TemporaryDirectory() as temp:

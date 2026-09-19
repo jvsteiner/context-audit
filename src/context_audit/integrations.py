@@ -47,12 +47,12 @@ export default function (pi: any) {
   pi.registerCommand("context-audit", {
     description: "Open a context timeline for the current session",
     handler: async (_args: string, ctx: any) => {
-      const file = ctx.sessionManager.getSessionFile();
-      if (!file) { ctx.ui.notify("This session has no saved transcript yet.", "warning"); return; }
+      const sessionId = ctx.sessionManager.getSessionId();
+      if (!sessionId) { ctx.ui.notify("Active session identity is unavailable.", "warning"); return; }
       ctx.ui.notify("Generating context map…", "info");
       try {
         const { stdout } = await exec("uv", ["run", "--project", PROJECT,
-          "context-audit", "current", "--client", CLIENT, "--session-file", file],
+          "context-audit", "current", "--client", CLIENT, "--session-id", sessionId],
           { timeout: 120000, maxBuffer: 1024 * 1024 });
         ctx.ui.notify(stdout.trim(), "info");
       } catch (error: any) { ctx.ui.notify(error.stderr || error.message, "error"); }

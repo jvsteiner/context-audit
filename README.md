@@ -81,6 +81,13 @@ This preserves existing hooks, backs up configuration, and adds passive observer
   session or reload extensions. The observer returns no replacement payloads.
 
 Native events join request metadata in `~/.context-audit/captures/CLIENT-SESSION_ID/events.jsonl`.
+The OMP/Pi slash command uses the session manager's ID, not transcript persistence.
+Already-loaded older commands can resolve the UUID from their explicit native
+timestamp/UUID filename if the file has not been written. No neighboring or latest
+session is selected. If only lifecycle events exist, the viewer shows a pending
+capture status rather than a zero-token window. Send a normal prompt and rerun the
+command; if the model has already replied, missing requests indicate a collection
+gap, not an empty context.
 Bodies exist only in memory; artifacts contain keyed fingerprints, counts, IDs,
 source names and paths. These paths are visible metadata, not anonymized data.
 Use `/context-audit` in Claude/OMP or `$context-audit` in Codex as before. Previously

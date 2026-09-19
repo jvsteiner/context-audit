@@ -8,6 +8,26 @@ def valid_id(value):
     return isinstance(value, str) and bool(re.fullmatch(r'[a-zA-Z0-9_-]{1,128}', value))
 
 
+def native_session_id(path):
+    """Compatibility for already-loaded Pi/OMP commands passing a session path.
+
+    A native manager can assign the timestamp_UUID path before persisting it.
+    Resolve that explicit identity, never a newer or neighboring session.
+    """
+    try:
+        with path.open() as stream:
+            header = json.loads(stream.readline())
+    except FileNotFoundError:
+        match = re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z_'
+                             r'([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\.jsonl', path.name)
+        if not match:
+            raise ValueError('Session transcript is unavailable and its name has no native session ID; pass --session-id.') from None
+        return match[1]
+    if not isinstance(header, dict) or header.get('type') != 'session' or not valid_id(header.get('id')):
+        raise ValueError('Expected a valid native session header; pass --session-id explicitly.')
+    return header['id']
+
+
 def has_tool_definitions(request):
     return any(c.get('category') == 'tool-definition' for c in request.get('components', []))
 
@@ -66,9 +86,28 @@ def resolve(client, session_id, root=None):
         raise ValueError('Active session identity is unavailable; no capture will be guessed.')
     matches = [r for r in discover(root) if r['client'] == client and r['session_id'] == session_id]
     if not matches:
+        if client in ('omp', 'pi', 'claude', 'codex'):
+            directory = (root or Path.home() / '.context-audit/captures') / f'{client}-{session_id}'
+            if lifecycle_only(directory, client):
+                return directory
         raise ValueError('This session was not captured. No audit graph was generated. '
                          'Check context-audit status and enable default recording with context-audit install, or use context-audit run. '
                          'For partial transcript exploration, use context-audit visualize explicitly.')
     if len(matches) != 1:
         raise ValueError('Multiple recordings match this session. Use captures and capture-report to select one explicitly.')
     return Path(matches[0]['directory'])
+
+
+def lifecycle_only(directory, client=None):
+    path = directory / 'events.jsonl'
+    if not path.is_file():
+        return []
+    rows = [json.loads(line) for line in path.read_text().splitlines(keepends=True) if line.endswith('\n')]
+    if any(r.get('type') == 'request' for r in rows):
+        return []
+    events = [r for r in rows if r.get('type') == 'source-event']
+    if not events or len({e['client'] for e in events}) != 1:
+        return []
+    if client is not None and events[0]['client'] != client:
+        return []
+    return events

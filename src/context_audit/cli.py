@@ -278,11 +278,8 @@ def main():
                 client = clients[0]
             session_id = args.session_id or os.environ.get({'codex': 'CODEX_THREAD_ID', 'claude': 'CLAUDE_SESSION_ID'}.get(client, 'CONTEXT_AUDIT_SESSION_ID'))
             if client in ('pi', 'omp') and not session_id and args.session_file:
-                with args.session_file.open() as stream:
-                    header = json.loads(stream.readline())
-                if header.get('type') != 'session':
-                    raise ValueError('Expected a native session header; pass --session-id explicitly.')
-                session_id = header.get('id')
+                from .recordings import native_session_id
+                session_id = native_session_id(args.session_file)
             directory = resolve(client, session_id)
             output = args.output or Path.home() / '.context-audit/reports' / f'{client}-{session_id}-capture.html'
             output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
