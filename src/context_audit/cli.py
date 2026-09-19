@@ -111,6 +111,12 @@ def session_markdown(report: dict) -> str:
 def main():
     parser = argparse.ArgumentParser(description="Inventory, measure, and track coding-agent context sources.")
     sub = parser.add_subparsers(dest="command", required=True)
+    for name in ('install-provenance', 'uninstall-provenance'):
+        p = sub.add_parser(name, help='Preview native lifecycle observer changes; --apply makes them')
+        p.add_argument('--apply', action='store_true')
+    sub.add_parser('provenance-status', help='Show installed observers and observed native events')
+    p = sub.add_parser('observe-event', help=argparse.SUPPRESS)
+    p.add_argument('--client', choices=('claude', 'codex'), required=True)
     p = sub.add_parser('install', help='Preview default-on macOS recording; --apply installs and starts it')
     p.add_argument('--codex-auth', choices=('chatgpt', 'api-key'), help='Defaults to the method reported by codex login status')
     p.add_argument('--apply', action='store_true')
@@ -184,6 +190,21 @@ def main():
     p.add_argument("receipt", type=Path)
     args = parser.parse_args()
     try:
+        if args.command == 'observe-event':
+            from .observer import observe_stdin
+            observe_stdin(args.client)
+            return
+        if args.command in ('install-provenance', 'uninstall-provenance'):
+            from .provenance_install import install, uninstall
+            operation = install if args.command == 'install-provenance' else uninstall
+            print(json.dumps(operation(), indent=2), flush=True)
+            if args.apply:
+                print(json.dumps(operation(apply=True), indent=2))
+            return
+        if args.command == 'provenance-status':
+            from .provenance_install import status
+            print(json.dumps(status(), indent=2))
+            return
         if args.command == 'install':
             from .installation import plan, preview, apply
             proposal = plan(codex_auth=args.codex_auth)
@@ -256,13 +277,17 @@ def main():
                     raise ValueError('Cannot identify the active client; pass --client and --session-id.')
                 client = clients[0]
             session_id = args.session_id or os.environ.get({'codex': 'CODEX_THREAD_ID', 'claude': 'CLAUDE_SESSION_ID'}.get(client, 'CONTEXT_AUDIT_SESSION_ID'))
-            if client in ('pi', 'omp'):
-                raise ValueError('This session was not captured: Pi/OMP request recording is not connected. Use visualize for partial transcript exploration.')
+            if client in ('pi', 'omp') and not session_id and args.session_file:
+                with args.session_file.open() as stream:
+                    header = json.loads(stream.readline())
+                if header.get('type') != 'session':
+                    raise ValueError('Expected a native session header; pass --session-id explicitly.')
+                session_id = header.get('id')
             directory = resolve(client, session_id)
             output = args.output or Path.home() / '.context-audit/reports' / f'{client}-{session_id}-capture.html'
             output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             atomic_write(output, render_recording(directory, session_id))
-            print(f'Wrote {output.resolve()} (captured requests; attribution remains incomplete)')
+            print(f'Wrote {output.resolve()} (entire observed session; see provenance evidence and coverage in the report)')
             if not args.no_open:
                 webbrowser.open(output.resolve().as_uri())
             return

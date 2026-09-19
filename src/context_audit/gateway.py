@@ -19,7 +19,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class Gateway:
-    def __init__(self, upstream, store: CaptureStore, port=0, prefix=None):
+    def __init__(self, upstream, store: CaptureStore, port=0, prefix=None, event_stores=None):
         parsed = urllib.parse.urlsplit(upstream)
         if parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise ValueError("Upstream must be a base URL without credentials, query or fragment")
@@ -44,6 +44,32 @@ class Gateway:
                     self.end_headers()
                     self.wfile.write(body)
                     return
+                # Codex refreshes its model catalog independently of inference.
+                # This is not a context request. Keep auth in memory and never
+                # follow redirects or open arbitrary GET routes.
+                if (urllib.parse.urlsplit(self.path).path == gateway.prefix + '/models'
+                        and self.headers.get('Upgrade', '').lower() != 'websocket'):
+                    headers = {k: v for k, v in self.headers.items() if k.lower() not in hop}
+                    headers['Accept-Encoding'] = 'identity'
+                    request = urllib.request.Request(gateway.upstream + self.path[len(gateway.prefix):], headers=headers)
+                    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+                    try:
+                        try:
+                            response = opener.open(request, timeout=30)
+                        except urllib.error.HTTPError as exc:
+                            response = exc
+                        with response:
+                            self.send_response(response.status)
+                            for key, value in response.headers.items():
+                                if key.lower() not in hop:
+                                    self.send_header(key, value)
+                            self.send_header('Connection', 'close')
+                            self.end_headers()
+                            while chunk := response.read(65536):
+                                self.wfile.write(chunk)
+                    except (OSError, urllib.error.URLError):
+                        self.close_connection = True
+                    return
                 # Never silently miss a WebSocket request.
                 self.send_error(501, "HTTP JSON POST capture only; WebSocket capture is not supported")
 
@@ -61,10 +87,29 @@ class Gateway:
                         return
                     raw = self.rfile.read(size)
                     payload = json.loads(raw)
+                    if not isinstance(payload, dict):
+                        raise ValueError('Expected JSON object')
+                    if self.path == gateway.prefix + '/events':
+                        from .recordings import valid_id
+                        from .provenance import record_event
+                        client, sid = payload.get('client'), payload.get('session_id')
+                        if not event_stores or client not in event_stores or not valid_id(sid):
+                            raise ValueError('Invalid collector client or session')
+                        target = event_stores[client].for_session(sid)
+                        if payload.get('event') == 'provider_request':
+                            if client not in ('omp', 'pi'):
+                                raise ValueError('Native provider capture is for extension clients')
+                            target.request(payload['payload'], transport='native-extension', session_id=sid,
+                                           session_evidence='native-session-manager')
+                        else:
+                            record_event(target, payload['payload'])
+                        self.send_response(204)
+                        self.end_headers()
+                        return
                     session_id, evidence = session_identity(gateway.store.client, payload, self.headers)
                     store = gateway.store.for_session(session_id) if hasattr(gateway.store, 'for_session') else gateway.store
                     row = store.request(payload, session_id=session_id, session_evidence=evidence)
-                except (ValueError, OSError, TypeError):
+                except (ValueError, OSError, TypeError, KeyError):
                     self.send_error(400, "Request could not be captured; not forwarded")
                     return
                 headers = {k: v for k, v in self.headers.items() if k.lower() not in hop}

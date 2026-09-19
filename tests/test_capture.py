@@ -87,3 +87,28 @@ class CaptureTests(unittest.TestCase):
     def test_gateway_rejects_credential_urls(self):
         with self.assertRaises(ValueError):
             Gateway("https://user:password@example.com", self.store)
+
+    def test_model_catalog_passthrough_is_not_context(self):
+        seen = []
+        class Upstream(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_GET(self):
+                seen.append((self.path, self.headers.get('Authorization')))
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"models":[]}')
+        upstream = ThreadingHTTPServer(('127.0.0.1', 0), Upstream)
+        threading.Thread(target=upstream.serve_forever, daemon=True).start()
+        gateway = Gateway(f'http://127.0.0.1:{upstream.server_port}', self.store)
+        gateway.start()
+        try:
+            req = urllib.request.Request(gateway.url + '/models?client_version=1', headers={'Authorization': 'PRIVATE_AUTH'})
+            with urllib.request.urlopen(req) as response:
+                self.assertEqual(response.read(), b'{"models":[]}')
+            self.assertEqual(seen, [('/models?client_version=1', 'PRIVATE_AUTH')])
+            self.assertFalse((self.root / 'events.jsonl').exists())
+        finally:
+            gateway.close()
+            upstream.shutdown()
+            upstream.server_close()

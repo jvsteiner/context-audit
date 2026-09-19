@@ -35,8 +35,9 @@ files are backed up privately. Existing hooks and unrelated settings are retaine
 Provider credentials and request bodies pass through memory, not recorder logs.
 If the recorder is unavailable, routed requests fail; they are not silently sent
 without recording. Higher-priority project/profile/CLI overrides may still bypass
-the default routing. Pi/OMP automatic capture and Codex desktop validation are
-not implemented. Hook/file source attribution remains incomplete.
+the default routing. OMP uses the native observer described below; unmodified Pi
+and Codex desktop are not runtime-validated. Hook/file source attribution has
+explicit evidence limits rather than a claim of completeness.
 
 ```sh
 uv run --project ~/Code/context-audit context-audit status
@@ -59,6 +60,56 @@ The service runs Python from this checkout's virtual environment; keep the
 checkout and `.venv` in place while installed. The default capture path continues
 a session's ledger after recorder restarts. Reports offer a request selector,
 not an additive sum of every request into a context window.
+
+## Native injection provenance
+
+After installing the recorder, enable native lifecycle observation once:
+
+```sh
+uv run --project ~/Code/context-audit context-audit install-provenance
+uv run --project ~/Code/context-audit context-audit install-provenance --apply
+uv run --project ~/Code/context-audit context-audit provenance-status
+```
+
+This preserves existing hooks, backs up configuration, and adds passive observers:
+
+- Claude: instruction loads (including parent/trigger paths), submitted prompts,
+  tool operations and model-facing tool batches, session and compaction events.
+- Codex: submitted prompts, tool operations, session and compaction events.
+  **Review and trust the added hooks in Codex.** Installation does not bypass trust.
+- OMP: native lifecycle and provider-request extension callbacks. Start a new
+  session or reload extensions. The observer returns no replacement payloads.
+
+Native events join request metadata in `~/.context-audit/captures/CLIENT-SESSION_ID/events.jsonl`.
+Bodies exist only in memory; artifacts contain keyed fingerprints, counts, IDs,
+source names and paths. These paths are visible metadata, not anonymized data.
+Use `/context-audit` in Claude/OMP or `$context-audit` in Codex as before. Previously
+collected sessions can be listed with `captures` and opened with `capture-report`:
+
+```sh
+uv run --project ~/Code/context-audit context-audit capture-report \
+  ~/.context-audit/captures/claude-SESSION_ID --output /tmp/context-map.html
+```
+
+The block inspector shows exact-content versus call-ID-only links and competing
+sources. The lifecycle panel shows instruction load reasons and events that could
+not be linked. Missing historical native events cannot be recreated from metadata.
+An exact match establishes equal normalized content, not unique causation.
+Sibling hooks cannot observe other hooks' stdout; instruction-load events do not
+include file bodies. OMP callbacks establish what was visible at that extension
+position, not proof that later extensions or every provider preserve it unchanged.
+Native observer failures emit a bounded warning and do not block the agent;
+their absence must not be interpreted as zero context injection.
+
+Remove observers before removing the recorder:
+
+```sh
+uv run --project ~/Code/context-audit context-audit uninstall-provenance --apply
+```
+
+Removal preserves unrelated hook edits and refuses conflicting changes to owned
+observers. Recordings and backups remain. See the
+[cross-client research and implementation plan](docs/provenance-plan.md).
 
 ## Request capture prototype
 

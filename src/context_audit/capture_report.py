@@ -3,6 +3,7 @@ import json
 from collections import defaultdict, deque, Counter
 from .core import ENCODING
 from .recordings import has_tool_definitions
+from .provenance import link_events
 
 
 def report(directory, sequence=None, session_id=None, session_wide=False):
@@ -18,6 +19,7 @@ def report(directory, sequence=None, session_id=None, session_wide=False):
     if not session_wide:
         requests = [r for r in requests if has_tool_definitions(r) == tool_stream]
     sources = {r['source_id']: r for r in records if r.get('type') == 'source'}
+    events = [r for r in records if r.get('type') == 'source-event']
     previous = defaultdict(deque)
     history, sightings = {}, defaultdict(list)
     for row in requests:
@@ -68,6 +70,16 @@ def report(directory, sequence=None, session_id=None, session_wide=False):
                        source_ids=component['source_ids'], fingerprint_type='HMAC-SHA256', first_seen_request=age[0],
                        measurement=part['measurement'], token_cost_unknown=size is None)
         details.update({k: part[k] for k in ('media', 'call_id', 'tool') if k in part})
+        links = link_events(part, events)
+        details['provenance'] = links
+        # Several lifecycle observations of the same source are not competing origins.
+        origins = {json.dumps(link['source'], sort_keys=True) for link in links}
+        details['provenance_status'] = ('multiple-candidate-sources' if len(origins) > 1 else
+                                        'source-linked' if links else 'no-native-source-link')
+        if len(origins) == 1:
+            native_source = links[0]['source']
+            source = native_source.get('file_path') or native_source.get('skill') or native_source['label']
+            details.update({k: native_source[k] for k in ('file_path', 'skill', 'tool') if k in native_source})
         if session_wide:
             seen = sightings[age[:2]]
             details.update(observed_in_requests=seen, last_seen_request=seen[-1],
@@ -86,6 +98,14 @@ def report(directory, sequence=None, session_id=None, session_wide=False):
             if origin['details'].get('tool'):
                 b['details']['tool'] = origin['details']['tool']
     unknown = sum(b['details']['token_cost_unknown'] for b in blocks)
+    linked = {link['event_id'] for b in blocks for link in b['details']['provenance']}
+    provenance = dict(native_events=len(events), linked_blocks=sum(bool(b['details']['provenance']) for b in blocks),
+                      total_blocks=len(blocks), unmatched_events=sum(e['event_id'] not in linked for e in events),
+                      ambiguous_blocks=sum(b['details']['provenance_status'] == 'multiple-candidate-sources' for b in blocks))
+    lifecycle = [dict(event_id=e['event_id'], event=e['event'], timestamp=e['timestamp'], source=e['source'],
+                      observation_point=e.get('observation_point', e['event']), linked=e['event_id'] in linked,
+                      blocks=[b['id'] for b in blocks if any(l['event_id'] == e['event_id'] for l in b['details']['provenance'])])
+                 for e in events]
     scope = (f"Captured request #{request['sequence']}. Oldest observed content on the left; newer additions on the right. "
              'Only components present in this request are shown. Unchanged components keep their observed age; changed or reintroduced components are new observations. '
              'For components first seen together, system instructions and tool definitions precede message order. This is an observation timeline, not verified model-internal order. '
@@ -103,6 +123,7 @@ def report(directory, sequence=None, session_id=None, session_wide=False):
                  f'{unknown} unknown-cost blocks are excluded from the measured total. Image encodings are not text tokens. '
                  'Only captured request contents are represented; unrecorded output, server-side context and complete injection provenance remain unresolved.')
     return dict(client=request['client'], path=str(directory / 'events.jsonl'), tokenizer=ENCODING,
+                provenance=provenance, lifecycle_events=lifecycle,
                 view_kind='captured-session' if session_wide else 'captured-request', coverage_notice=scope, context_snapshots=[], errors=[],
                 timeline=dict(blocks=blocks, total_recorded_tokens=offset, by_category=totals, unknown_token_blocks=unknown,
                               by_source=[dict(category=b['category'], source=b['source'], tokens=b['tokens'], unknown=b['details']['token_cost_unknown']) for b in blocks], measurement=scope))

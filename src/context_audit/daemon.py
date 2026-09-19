@@ -33,9 +33,10 @@ def serve(config_path):
     stopped = threading.Event()
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        event_stores = {client: SessionStores(Path(config['captures']), client) for client in ('codex', 'claude', 'omp', 'pi')}
         for client, route in config['routes'].items():
-            gateway = Gateway(route['upstream'], SessionStores(Path(config['captures']), client),
-                              port=route['port'], prefix=route['prefix'])
+            gateway = Gateway(route['upstream'], event_stores[client],
+                              port=route['port'], prefix=route['prefix'], event_stores=event_stores)
             gateway.start()
             gateways.append(gateway)
         def stop(*_):
