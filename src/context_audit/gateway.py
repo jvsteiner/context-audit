@@ -96,11 +96,12 @@ class Gateway:
                         if not event_stores or client not in event_stores or not valid_id(sid):
                             raise ValueError('Invalid collector client or session')
                         target = event_stores[client].for_session(sid)
-                        if payload.get('event') == 'provider_request':
+                        if payload.get('event') in ('provider_request', 'runtime_context'):
                             if client not in ('omp', 'pi'):
                                 raise ValueError('Native provider capture is for extension clients')
                             target.request(payload['payload'], transport='native-extension', session_id=sid,
-                                           session_evidence='native-session-manager')
+                                           session_evidence='native-session-manager',
+                                           record_type='runtime-context' if payload['event'] == 'runtime_context' else 'request')
                         else:
                             record_event(target, payload['payload'])
                         self.send_response(204)

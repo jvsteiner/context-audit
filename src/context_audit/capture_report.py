@@ -8,7 +8,7 @@ from .provenance import link_events
 
 def report(directory, sequence=None, session_id=None, session_wide=False):
     records = [json.loads(line) for line in (directory / 'events.jsonl').read_text().splitlines(keepends=True) if line.endswith('\n')]
-    requests = [r for r in records if r.get('type') == 'request' and (session_id is None or r.get('session_id') == session_id)]
+    requests = [r for r in records if r.get('type') in ('request', 'runtime-context') and (session_id is None or r.get('session_id') == session_id)]
     if sequence is not None:
         requests = [r for r in requests if r['sequence'] <= sequence]
     if not requests or (sequence is not None and requests[-1]['sequence'] != sequence):
@@ -70,6 +70,8 @@ def report(directory, sequence=None, session_id=None, session_wide=False):
                        source_ids=component['source_ids'], fingerprint_type='HMAC-SHA256', first_seen_request=age[0],
                        measurement=part['measurement'], token_cost_unknown=size is None)
         details.update({k: part[k] for k in ('media', 'call_id', 'tool') if k in part})
+        first = next(r for r in requests if r['sequence'] == age[0])
+        details['first_observation_kind'] = first['type']
         links = link_events(part, events)
         details['provenance'] = links
         # Several lifecycle observations of the same source are not competing origins.
@@ -122,6 +124,14 @@ def report(directory, sequence=None, session_id=None, session_wide=False):
                  'Click a block for the requests containing it. Absence from a request does not establish eviction or compaction. '
                  f'{unknown} unknown-cost blocks are excluded from the measured total. Image encodings are not text tokens. '
                  'Only captured request contents are represented; unrecorded output, server-side context and complete injection provenance remain unresolved.')
+    runtime_count = sum(r['type'] == 'runtime-context' for r in requests)
+    if runtime_count:
+        scope = (f'{runtime_count} startup runtime snapshots and {len(requests) - runtime_count} provider requests observed. '
+                 'Startup snapshots measure the effective system prompt and enabled tool schemas exposed at the observer callback, '
+                 'not provider-delivered context. Later extensions, resource loading and provider serialization can change them. '
+                 'Older observations appear on the left, newer on the right. Estimates are not model-window occupancy or billing. '
+                 'Identical content is deduplicated across observations; changed versions remain visible. '
+                 'Full source attribution is not established.')
     return dict(client=request['client'], path=str(directory / 'events.jsonl'), tokenizer=ENCODING,
                 provenance=provenance, lifecycle_events=lifecycle,
                 view_kind='captured-session' if session_wide else 'captured-request', coverage_notice=scope, context_snapshots=[], errors=[],

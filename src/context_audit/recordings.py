@@ -65,7 +65,7 @@ def requests(directory):
     # A live append can leave a final line unfinished. Never ignore corrupt complete lines.
     lines = path.read_text().splitlines(keepends=True)
     return [row for line in lines if line.endswith('\n')
-            if (row := json.loads(line)).get('type') == 'request']
+            if (row := json.loads(line)).get('type') in ('request', 'runtime-context')]
 
 
 def discover(root=None):
@@ -77,7 +77,8 @@ def discover(root=None):
         for client, session_id in identities:
             matches = [r for r in rows if r['client'] == client and (r.get('session_id') or '') == session_id]
             found.append(dict(directory=str(path.parent), client=client, session_id=session_id or None,
-                              requests=len(matches), latest=matches[-1]['timestamp']))
+                              requests=sum(r['type'] == 'request' for r in matches),
+                              runtime_snapshots=sum(r['type'] == 'runtime-context' for r in matches), latest=matches[-1]['timestamp']))
     return found
 
 
@@ -103,7 +104,7 @@ def lifecycle_only(directory, client=None):
     if not path.is_file():
         return []
     rows = [json.loads(line) for line in path.read_text().splitlines(keepends=True) if line.endswith('\n')]
-    if any(r.get('type') == 'request' for r in rows):
+    if any(r.get('type') in ('request', 'runtime-context') for r in rows):
         return []
     events = [r for r in rows if r.get('type') == 'source-event']
     if not events or len({e['client'] for e in events}) != 1:

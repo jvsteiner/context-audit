@@ -31,7 +31,7 @@ def render_recording(directory, session_id=None, sequence=None):
     if len({r.get('session_id') for r in rows}) > 1:
         raise ValueError('This recording contains multiple session identities. Pass --session-id; contexts will not be mixed.')
     pages = [dict(label='Entire observed session', preferred=True, html=render(report(directory, session_id=session_id, session_wide=True)))]
-    pages += [dict(label=f"Request {r['sequence']} · {r['timestamp']} · {'tool-bearing' if has_tool_definitions(r) else 'no tool definitions'}",
+    pages += [dict(label=f"{'Startup runtime snapshot' if r['type'] == 'runtime-context' else 'Request'} {r['sequence']} · {r['timestamp']} · {'tool-bearing' if has_tool_definitions(r) else 'no tool definitions'}",
                    preferred=False, html=render(report(directory, r['sequence'], session_id))) for r in rows]
     data = json.dumps(pages).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
     return '''<!doctype html><html lang="en"><meta charset="utf-8"><title>Context Audit · Recording</title>

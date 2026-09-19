@@ -92,6 +92,31 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(r['provenance']['linked_blocks'], 1)
         self.assertNotIn('not retained', (s.directory / 'events.jsonl').read_text())
 
+    def test_startup_snapshot_is_not_a_request_and_survives_restart(self):
+        from context_audit.recordings import discover, resolve
+        from context_audit.recording_view import render_recording
+        directory = self.root / 'omp-startup'
+        s = CaptureStore(directory, 'omp')
+        payload = {'system': ['PRIVATE_STARTUP'], 'tools': [{'name': 'read', 'input_schema': {'type': 'object'}}]}
+        s.request(payload, record_type='runtime-context', session_id='startup')
+        self.assertEqual(resolve('omp', 'startup', self.root), directory)
+        row = next(r for r in discover(self.root) if r['session_id'] == 'startup')
+        self.assertEqual(row['requests'], 0)
+        self.assertEqual(row['runtime_snapshots'], 1)
+        first = report(directory, session_wide=True)
+        self.assertGreater(first['timeline']['total_recorded_tokens'], 0)
+        self.assertIn('0 provider requests', first['coverage_notice'])
+        self.assertIn('Startup runtime snapshot', render_recording(directory))
+        reopened = CaptureStore(directory, 'omp')
+        sent = reopened.request(payload | {'messages': [{'role': 'user', 'content': 'hello'}]}, session_id='startup')
+        self.assertEqual(sent['sequence'], 2)
+        combined = report(directory, session_wide=True)
+        blocks = combined['timeline']['blocks']
+        self.assertEqual(len(blocks), 3)
+        self.assertEqual(blocks[0]['details']['first_observation_kind'], 'runtime-context')
+        self.assertEqual(blocks[-1]['category'], 'user')
+        self.assertNotIn('PRIVATE_STARTUP', (directory / 'events.jsonl').read_text())
+
     def test_codex_native_call_matches_responses_output(self):
         s = CaptureStore(self.root / 'codex', 'codex')
         record_event(s, {'hook_event_name': 'PostToolUse', 'tool_name': 'exec_command',
@@ -152,6 +177,10 @@ class ProvenanceTests(unittest.TestCase):
         for sid in ('one', 'two'):
             send({'client': 'claude', 'session_id': sid, 'payload': {'hook_event_name': 'SessionStart'}})
         send({'client': 'omp', 'session_id': 'one', 'event': 'provider_request', 'payload': {'system': 'private'}})
+        send({'client': 'omp', 'session_id': 'startup', 'event': 'runtime_context', 'payload': {'system': ['private startup']}})
+        startup = json.loads((stores['omp'].for_session('startup').directory / 'events.jsonl').read_text())
+        self.assertEqual(startup['type'], 'runtime-context')
+        self.assertEqual(startup['context_status'], 'not-a-provider-request')
         self.assertNotEqual(stores['claude'].for_session('one').key, stores['claude'].for_session('two').key)
         self.assertEqual(stores['omp'].for_session('one').sequence, 1)
         for bad in ([], {'client': 'claude', 'session_id': '../bad', 'payload': {}},

@@ -234,7 +234,7 @@ def main():
             from .recordings import discover
             rows = discover()
             for row in rows:
-                print(f"{row['client']} · {row['session_id'] or 'unidentified session'} · {row['requests']} requests · {row['directory']}")
+                print(f"{row['client']} · {row['session_id'] or 'unidentified session'} · {row['requests']} requests · {row.get('runtime_snapshots', 0)} runtime snapshots · {row['directory']}")
             if not rows:
                 print('No metadata recordings found. Installation alone does not enable recording.')
             return

@@ -80,6 +80,14 @@ This preserves existing hooks, backs up configuration, and adds passive observer
 - OMP: native lifecycle and provider-request extension callbacks. Start a new
   session or reload extensions. The observer returns no replacement payloads.
 
+OMP also snapshots its effective system prompt and enabled tool schemas at the
+`session_start` callback, before any user prompt or model request is required.
+These records are marked `runtime-context`, not provider requests. They appear at
+the beginning of the session graph; unchanged content is deduplicated against
+later observations. The snapshot reflects what OMP exposes at that callback,
+not context added afterward by other extensions, resource loading, or provider
+serialization. It does not claim that every startup source is already attributed.
+
 Native events join request metadata in `~/.context-audit/captures/CLIENT-SESSION_ID/events.jsonl`.
 The OMP/Pi slash command uses the session manager's ID, not transcript persistence.
 Already-loaded older commands can resolve the UUID from their explicit native

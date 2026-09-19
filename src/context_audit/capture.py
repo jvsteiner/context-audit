@@ -45,7 +45,7 @@ class CaptureStore:
                 record = json.loads(line)
                 if record.get("type") == "source":
                     self.sources.setdefault(record["fingerprint"], []).append(record)
-                elif record.get("type") == "request":
+                elif record.get("type") in ("request", "runtime-context"):
                     if record["client"] != client:
                         raise ValueError("Capture directory belongs to another client")
                     self.sequence = record["sequence"]
@@ -70,7 +70,9 @@ class CaptureStore:
             self.append(row)
         return row
 
-    def request(self, payload, transport="http", session_id=None, session_evidence=None):
+    def request(self, payload, transport="http", session_id=None, session_evidence=None, record_type="request"):
+        if record_type not in ('request', 'runtime-context'):
+            raise ValueError('Invalid observation type')
         if not isinstance(payload, dict):
             raise ValueError("Request body must be a JSON object")
         with self.lock:
@@ -123,7 +125,7 @@ class CaptureStore:
             delta = dict(added=sum((current - old).values()), removed=sum((old - current).values()),
                          retained=sum((old & current).values()))
             reference = bool(payload.get("previous_response_id"))
-            row = dict(type="request", schema_version=2, request_id=str(uuid.uuid4()), sequence=self.sequence,
+            row = dict(type=record_type, schema_version=2, request_id=str(uuid.uuid4()), sequence=self.sequence,
                        session_id=session_id, session_evidence=session_evidence,
                        timestamp=datetime.now(timezone.utc).isoformat(), client=self.client, transport=transport,
                        tokenizer=ENCODING, serialized_request_tokens=tokens(canonical(payload)),
@@ -133,6 +135,12 @@ class CaptureStore:
                        limitations=["Serialized token estimates are not provider token counts or additive component accounting.",
                                     "Message bodies may combine several sources; source identity requires injection-side instrumentation.",
                                     "Media, encrypted content and server-side context are fingerprinted but not semantically reconstructed."])
+            if record_type == 'runtime-context':
+                for item in components:
+                    if item['attribution'] == 'request-structure-only':
+                        item['attribution'] = 'runtime-structure-only'
+                row.update(capture_status='runtime-snapshot', context_status='not-a-provider-request',
+                           coverage_scope='Effective system prompt and enabled tool schemas at the startup observer callback; later extensions and provider serialization may change them.')
             self.append(row)
             self.previous = current
             return row

@@ -95,3 +95,18 @@ silently forwarded as uncaptured inference.
 This increment is not a complete causal audit: sibling hook output, mixed-source
 instruction spans, unobserved provider/server-side additions, unsupported callback
 paths, and untrusted hooks remain explicit release gates.
+
+### OMP pre-request startup snapshot
+
+Installed OMP 18.2.6 exposes `ctx.getSystemPrompt()` and
+`pi.getActiveTools()` / `pi.getAllTools()` after extension initialization. The
+observer now snapshots the effective system prompt and enabled tool schemas at
+`session_start`, without initiating inference. It stores metadata using a separate
+`runtime-context` record type, distinguishes these from provider requests in
+discovery and the viewer, and preserves their observed age as later requests arrive.
+Other extension handlers or resources loaded later can still change these values.
+
+A real RPC startup test with no prompt produced one runtime snapshot containing
+49 blocks and 22,073 estimated text/schema tokens, with zero provider requests.
+The daemon and installed OMP observer were updated; an already-running session
+needs extension reload to take a snapshot of its current runtime state.
