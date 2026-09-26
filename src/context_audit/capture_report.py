@@ -4,10 +4,11 @@ from collections import defaultdict, deque, Counter
 from .core import ENCODING
 from .recordings import has_tool_definitions
 from .provenance import link_events
+from .ledger import records as ledger_records
 
 
 def report(directory, sequence=None, session_id=None, session_wide=False):
-    records = [json.loads(line) for line in (directory / 'events.jsonl').read_text().splitlines(keepends=True) if line.endswith('\n')]
+    records = ledger_records(directory)
     requests = [r for r in records if r.get('type') in ('request', 'runtime-context') and (session_id is None or r.get('session_id') == session_id)]
     if sequence is not None:
         requests = [r for r in requests if r['sequence'] <= sequence]

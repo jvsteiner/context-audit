@@ -131,6 +131,12 @@ def main():
     p.add_argument('--auth', choices=('chatgpt', 'api-key'), help='Required for Codex')
     p.add_argument('client_args', nargs=argparse.REMAINDER)
     p = sub.add_parser('captures', help='List metadata recordings and their observed session identities')
+    p = sub.add_parser('compact', help='Rewrite idle full-format recordings in the compact format; every row is verified')
+    p.add_argument('--captures', type=Path, default=Path.home() / '.context-audit/captures')
+    p = sub.add_parser('prune', help='Preview deleting the oldest recordings over the size limit; --apply deletes them')
+    p.add_argument('--captures', type=Path, default=Path.home() / '.context-audit/captures')
+    p.add_argument('--limit-gb', type=float, help='Default: capture_limit_bytes in service.json, else 2')
+    p.add_argument('--apply', action='store_true')
     p = sub.add_parser("probe-capture", help="Test installed clients against a local metadata-only rejecting endpoint")
     p.add_argument("--client", choices=("codex", "claude", "all"), default="all")
     p.add_argument("--output-dir", type=Path, required=True)
@@ -230,6 +236,25 @@ def main():
             from .launch import run
             rest = args.client_args[1:] if args.client_args[:1] == ['--'] else args.client_args
             sys.exit(run(args.client, args.upstream, args.auth, rest))
+        if args.command == 'compact':
+            from .ledger import compact, usage
+            for row in usage(args.captures):
+                result = compact(row['directory'])
+                if result['status'] == 'compacted':
+                    print(f"{result['directory']}: {result['bytes_before']:,} -> {result['bytes_after']:,} bytes", flush=True)
+                elif result['status'] == 'skipped-active':
+                    print(f"{result['directory']}: skipped, written in the last 15 minutes", flush=True)
+            return
+        if args.command == 'prune':
+            from .ledger import LIMIT_BYTES, prune
+            service = args.captures.parent / 'service.json'
+            limit = (int(args.limit_gb * 1024 ** 3) if args.limit_gb is not None else
+                     json.loads(service.read_text()).get('capture_limit_bytes', LIMIT_BYTES) if service.exists() else LIMIT_BYTES)
+            result = prune(args.captures, limit, apply=args.apply)
+            print(json.dumps(result, indent=2))
+            if not args.apply:
+                print('Preview only. Add --apply to delete these recordings. Recordings written in the last hour are kept.')
+            return
         if args.command == 'captures':
             from .recordings import discover
             rows = discover()

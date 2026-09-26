@@ -58,21 +58,16 @@ def session_identity(client, payload, headers):
     return None, None
 
 
-def requests(directory):
-    path = directory / 'events.jsonl'
-    if not path.exists():
-        return []
-    # A live append can leave a final line unfinished. Never ignore corrupt complete lines.
-    lines = path.read_text().splitlines(keepends=True)
-    return [row for line in lines if line.endswith('\n')
-            if (row := json.loads(line)).get('type') in ('request', 'runtime-context')]
+def requests(directory, expand=True):
+    from .ledger import records
+    return [row for row in records(directory, expand) if row.get('type') in ('request', 'runtime-context')]
 
 
 def discover(root=None):
     root = root or Path.home() / '.context-audit/captures'
     found = []
     for path in sorted(root.glob('*/events.jsonl')):
-        rows = requests(path.parent)
+        rows = requests(path.parent, expand=False)
         identities = sorted({(r['client'], r.get('session_id') or '') for r in rows})
         for client, session_id in identities:
             matches = [r for r in rows if r['client'] == client and (r.get('session_id') or '') == session_id]
@@ -100,10 +95,10 @@ def resolve(client, session_id, root=None):
 
 
 def lifecycle_only(directory, client=None):
-    path = directory / 'events.jsonl'
-    if not path.is_file():
+    from .ledger import records
+    if not (directory / 'events.jsonl').is_file():
         return []
-    rows = [json.loads(line) for line in path.read_text().splitlines(keepends=True) if line.endswith('\n')]
+    rows = records(directory, expand=False)
     if any(r.get('type') in ('request', 'runtime-context') for r in rows):
         return []
     events = [r for r in rows if r.get('type') == 'source-event']

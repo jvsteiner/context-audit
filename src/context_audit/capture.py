@@ -14,10 +14,7 @@ from pathlib import Path
 from .core import ENCODING, tokens
 from .identification import identify, text_parts
 from .content_parts import parts as content_parts
-
-
-def canonical(value):
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+from .ledger import Reader, Writer, canonical
 
 
 class CaptureStore:
@@ -38,26 +35,25 @@ class CaptureStore:
         self.previous = None
         self.sequence = 0
         self.sources = {}
-        events = directory / "events.jsonl"
-        if events.exists():
-            from collections import Counter
-            for line in events.read_text().splitlines():
-                record = json.loads(line)
-                if record.get("type") == "source":
-                    self.sources.setdefault(record["fingerprint"], []).append(record)
-                elif record.get("type") in ("request", "runtime-context"):
-                    if record["client"] != client:
-                        raise ValueError("Capture directory belongs to another client")
-                    self.sequence = record["sequence"]
-                    self.previous = Counter(x["fingerprint"] for x in record["components"])
+        from collections import Counter
+        reader = Reader(directory / "events.jsonl")
+        for record in reader:
+            if record.get("type") == "source":
+                self.sources.setdefault(record["fingerprint"], []).append(record)
+            elif record.get("type") in ("request", "runtime-context"):
+                if record["client"] != client:
+                    raise ValueError("Capture directory belongs to another client")
+                self.sequence = record["sequence"]
+                self.previous = Counter(x["fingerprint"] for x in record["components"])
+        self.writer = Writer(reader.refs, reader.known, reader.last_id)
 
     def fingerprint(self, value):
         return hmac.new(self.key, canonical(value).encode(), hashlib.sha256).hexdigest()
 
-    def append(self, record):
+    def append(self, *records):
         fd = os.open(self.directory / "events.jsonl", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with os.fdopen(fd, "a") as stream:
-            stream.write(json.dumps(record, ensure_ascii=True) + "\n")
+            stream.write("".join(json.dumps(record, ensure_ascii=True) + "\n" for record in records))
             stream.flush()
             os.fsync(stream.fileno())
 
@@ -125,7 +121,7 @@ class CaptureStore:
             delta = dict(added=sum((current - old).values()), removed=sum((old - current).values()),
                          retained=sum((old & current).values()))
             reference = bool(payload.get("previous_response_id"))
-            row = dict(type=record_type, schema_version=2, request_id=str(uuid.uuid4()), sequence=self.sequence,
+            row = dict(type=record_type, schema_version=3, request_id=str(uuid.uuid4()), sequence=self.sequence,
                        session_id=session_id, session_evidence=session_evidence,
                        timestamp=datetime.now(timezone.utc).isoformat(), client=self.client, transport=transport,
                        tokenizer=ENCODING, serialized_request_tokens=tokens(canonical(payload)),
@@ -141,6 +137,7 @@ class CaptureStore:
                         item['attribution'] = 'runtime-structure-only'
                 row.update(capture_status='runtime-snapshot', context_status='not-a-provider-request',
                            coverage_scope='Effective system prompt and enabled tool schemas at the startup observer callback; later extensions and provider serialization may change them.')
-            self.append(row)
+            # Unchanged component bodies and the unchanged prefix are not written again.
+            self.append(*self.writer.encode(row))
             self.previous = current
             return row

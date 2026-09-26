@@ -14,6 +14,7 @@ from context_audit.daemon import SessionStores
 from context_audit.gateway import Gateway
 from context_audit.provenance import record_event, link_events
 from context_audit.provenance_install import install, uninstall, status
+from context_audit.recordings import requests
 from context_audit.visualize import render
 
 
@@ -178,7 +179,7 @@ class ProvenanceTests(unittest.TestCase):
             send({'client': 'claude', 'session_id': sid, 'payload': {'hook_event_name': 'SessionStart'}})
         send({'client': 'omp', 'session_id': 'one', 'event': 'provider_request', 'payload': {'system': 'private'}})
         send({'client': 'omp', 'session_id': 'startup', 'event': 'runtime_context', 'payload': {'system': ['private startup']}})
-        startup = json.loads((stores['omp'].for_session('startup').directory / 'events.jsonl').read_text())
+        startup = requests(stores['omp'].for_session('startup').directory)[0]
         self.assertEqual(startup['type'], 'runtime-context')
         self.assertEqual(startup['context_status'], 'not-a-provider-request')
         self.assertNotEqual(stores['claude'].for_session('one').key, stores['claude'].for_session('two').key)
